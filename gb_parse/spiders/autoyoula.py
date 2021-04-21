@@ -1,43 +1,64 @@
+import re
+import pymongo
 import scrapy
 
 
+from ..loaders import AutoyoulaLoader
+
 class AutoyoulaSpider(scrapy.Spider):
-    name = 'autoyoula'
-    allowed_domains = ['auto.youla.ru']
-    start_urls = ['https://auto.youla.ru/']
+    name = "autoyoula"
+    allowed_domains = ["auto.youla.ru"]
+    start_urls = ["https://auto.youla.ru/"]
 
-    def _get_follow(self, response, select_str, callback, **kwargs):
-        for a in response.css(select_str):
-            url = a.attrib.get("href")
-            yield response.follow(url, callback=callback, **kwargs)
+    _xpath_data_query = {
+        "title": '//div[@data-target="advert-title"]/text()',
+        "price": '//div[@data-target="advert-price"]/text()',
+        "photos": '//div[contains(@class, "PhotoGallery_photoWrapper")]/figure//img/@src',
+        "characteristics":  '//div[contains(@class, "AdvertCard_specs")]'
+                            '//div[contains(@class, "AdvertSpecs_row")]',
+        "descriptions": '//div[@data-target="advert-info-descriptionFull"]/text()',
+        "author": "//body/script[contains(text(), 'window.transitState = decodeURIComponent')]/text()",
+    }
 
-    def parse(self, response):
-        brands = response.css("div.TransportMainFilters_brandsList__2tIkv a.blackLink")
-        yield from self._get_follow(
-                                    response,
-                                    "div.TransportMainFilters_brandsList__2tIkv a.blackLink",
-                                    self.brand_parse
-                                )
+    _xpath_selectors = {
+        "brands": "//a[@data-target='brand']/@href",
+        "pagination":   "//div[contains(@class, 'Paginator_block')]"
+                        "/a[@data-target-id='button-link-serp-paginator']/@href",
+        "car": "//article[@data-target='serp-snippet']//a[@data-target='serp-snippet-title']/@href",
+    }
 
-    def brand_parse(self, response):
-        yield from self._get_follow(
-                                    response,
-                                    "div.Paginator_block__2XAPy a.Paginator_button__u1e7D",
-                                    self.brand_parse
-                                 )
-        yield from self._get_follow(
-                                    response,
-                                    "article.SerpSnippet_snippet__3O1t2 a.SerpSnippet_name__3F7Yu",
-                                    self.car_parse
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.db_client = pymongo.MongoClient()
+
+    def _get_follow_xpath(self, response, selector, callback, **kwargs):
+        for link in response.xpath(selector):
+            yield response.follow(link, callback=callback, cb_kwargs=kwargs)
+
+
+    def parse(self, response, *args, **kwargs):
+        yield from self._get_follow_xpath(
+            response,
+            self._xpath_selectors["brands"],
+            self.brand_parse
 
         )
 
+    def brand_parse(self, response, **kwargs):
+        yield from self._get_follow_xpath(
+            response,
+            self._xpath_selectors["pagination"],
+            self.brand_parse,
+        )
+        yield from self._get_follow_xpath(
+            response,
+            self._xpath_selectors["car"],
+            self.car_parse,
+        )
+
     def car_parse(self, response):
-        data = {
-            "url": response.url,
-            "title": response.css("div.AdvertCard_advertTitle__1S1Ak::text").extract_first(),
-            "price": float(
-                response.css("div.AdvertCard_price__3dDCr::text").extract_first().replace("\u2009", "")
-            )
-        }
-        print(1)
+        loader = AutoyoulaLoader(response=response)
+        loader.add_value('url', response.url)
+        for key, xpath in self._xpath_data_query.items():
+            loader.add_xpath(key, xpath)
+        yield loader.load_item()
