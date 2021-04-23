@@ -10,14 +10,16 @@ if __name__ == '__main__':
     crawler_settings.setmodule("gb_parse.settings")
     crawler_proc = CrawlerProcess(settings=crawler_settings)
 
-    insta_tag = ['ivan.kurdin', 'echoesarinan']
+    sourse_user = ['echoesarinan']
+    target_user = ['ivan.kurdin']
     #insta_tag = ['python', 'programming']
 
     dotenv.load_dotenv(".env")
     insta_params = {
         'username': 'kurdinivan@gmail.com',
         'enc_password': os.getenv('ENC_PASSWORD'),
-        'search_users': insta_tag,
+        'sourse_user': sourse_user,
+        'target_user': target_user,
     }
 
     #crawler_proc.crawl(AutoyoulaSpider)

@@ -3,6 +3,7 @@ import json
 import datetime as dt
 from ..items import InstaPost, InstaTag
 from urllib.parse import urlencode
+from urllib.parse import urlparse, parse_qs
 
 class InstagramSpider(scrapy.Spider):
     name = 'instagram'
@@ -14,11 +15,12 @@ class InstagramSpider(scrapy.Spider):
     _fr_query_url = 'https://www.instagram.com/graphql/query/'
     _api_url = '/graphql/query/'
 
-    def __init__(self, username, enc_password, search_users, *args, **kwargs):
+    def __init__(self, username, enc_password, sourse_user, target_user, *args, **kwargs):
         super(InstagramSpider, self).__init__(*args, **kwargs)
         self.username = username
         self.enc_password = enc_password
-        self.search_users = search_users
+        self.sourse_user = sourse_user
+        self.target_user = target_user
 
     def auth(self, response):
         js_data = self.js_data_extract(response)
@@ -47,28 +49,45 @@ class InstagramSpider(scrapy.Spider):
         except AttributeError as e:
             print(e)
             if response.json()["authenticated"]:
-                for tag in self.search_users:
+                for tag in self.sourse_user:
                     yield response.follow(f"{self._start_page}{tag}/", callback=self.tag_page_parse)
 
     def tag_page_parse(self, response):
         js_data = self.js_data_extract(response)
         insta_tag = InstTag(js_data["entry_data"]["ProfilePage"][0]["graphql"]["user"])
-        yield insta_tag.get_tag_item()
-        yield from insta_tag.get_post_item()
+        username = js_data["entry_data"]["ProfilePage"][0]["graphql"]["user"]["username"]
         yield response.follow(
             f"{self._api_url}?{urlencode(insta_tag.paginate_params())}",
-            callback=self._api_tag_parse,
+            callback=self.follows_page_parse,
         )
 
-    def _api_tag_parse(self, response):
-        data = response.json()
-        insta_tag = InstTag(data["data"]["hashtag"])
-        yield from insta_tag.get_post_item()
-        yield response.follow(
-            f"{self._api_url}?{urlencode(insta_tag.paginate_params())}",
-            callback=self._api_tag_parse,
-        )
+    def follows_page_parse(self, response):
+        follow_json = json.loads(response.body.decode("utf-8"))["data"]["user"]["edge_followed_by"]["edges"]
+        follow_next_json = json.loads(response.body.decode("utf-8"))["data"]["user"]["edge_followed_by"]["page_info"]
+        if follow_next_json["has_next_page"]:
+            sourse_url = urlparse(response.url)
+            sourse_query = parse_qs(sourse_url.query)
+            insta_tag = InstTag(sourse_query['variables'])
+            insta_tag.add_after(follow_next_json["end_cursor"])
+            yield response.follow(
+                f"{self._api_url}?{urlencode(insta_tag.paginate_params())}",
+                callback=self.follows_page_parse,
+            )
+        for status in follow_json:
+            node = status["node"]
+            if not node['is_private']:
+                insta_tag = InstTag(node)
+                #yield response.follow(
+                #    f"{self._api_url}?{urlencode(insta_tag.paginate_params())}",
+                #    callback=self.follows_page_parse,
+                #)
+                print(1)
+            else:
+                print("user:", node['username'], "is_private")
+            print(3)
 
+    def is_paginate(self, response):
+        print(4)
 
     def js_data_extract(self, response):
         script = response.xpath('//script[contains(text(), "window._sharedData = ")]/text()').extract_first()
@@ -81,10 +100,15 @@ class InstTag:
     def __init__(self, hashtag: dict):
         self.variable = {
             "tag_name": hashtag["username"],
+            "id": hashtag["id"],
             "first": 100,
-            #"after": hashtag["edge_hashtag_to_media"]["page_info"]["end_cursor"],
         }
         self.hashtag = hashtag
+
+    def add_after(self, after):
+        self.variable = {
+            "after": after,
+        }
 
     def get_tag_item(self):
         item = InstaTag()
